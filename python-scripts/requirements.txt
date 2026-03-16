@@ -1,0 +1,7 @@
+numpy
+requests
+ultralytics
+# Optional on Windows: required only for direct GI bindings mode.
+# The script can fall back to gst-launch-1.0 CLI mode without this package.
+# PyGObject
+
