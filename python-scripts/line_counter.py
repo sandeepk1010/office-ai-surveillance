@@ -64,23 +64,35 @@ class SimpleTracker:
 
     def update(self, detections, line_y):
         assigned = {}
-        for det in detections:
-            best_id = None
-            best_dist = None
+        matched_detection_indexes = set()
+
+        # Build all viable object/detection matches and assign greedily by distance.
+        candidate_pairs = []
+        for det_index, det in enumerate(detections):
             for oid, centroid in self.objects.items():
                 d = euclid(det, centroid)
-                if d <= self.max_distance and (best_dist is None or d < best_dist):
-                    best_dist = d
-                    best_id = oid
+                if d <= self.max_distance:
+                    candidate_pairs.append((d, oid, det_index, det))
 
-            if best_id is not None:
-                assigned[best_id] = det
-            else:
-                oid = self.next_id
-                self.next_id += 1
-                self.objects[oid] = det
-                self.lost[oid] = 0
-                self.prev_side[oid] = 0 if det[1] < line_y else 1
+        candidate_pairs.sort(key=lambda item: item[0])
+
+        matched_object_ids = set()
+        for _distance, oid, det_index, det in candidate_pairs:
+            if oid in matched_object_ids or det_index in matched_detection_indexes:
+                continue
+            assigned[oid] = det
+            matched_object_ids.add(oid)
+            matched_detection_indexes.add(det_index)
+
+        # Create new tracked objects for any unmatched detections.
+        for det_index, det in enumerate(detections):
+            if det_index in matched_detection_indexes:
+                continue
+            oid = self.next_id
+            self.next_id += 1
+            self.objects[oid] = det
+            self.lost[oid] = 0
+            self.prev_side[oid] = 0 if det[1] < line_y else 1
 
         for oid, centroid in assigned.items():
             self.objects[oid] = centroid
@@ -311,6 +323,20 @@ def _rect_intersects(a, b):
     return ax1 <= bx2 and ax2 >= bx1 and ay1 <= by2 and ay2 >= by1
 
 
+def _rect_intersection(a, b):
+    if a is None or b is None:
+        return None
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return None
+    return (ix1, iy1, ix2, iy2)
+
+
 def detect_faces_in_crop(frame, face_cascade, person_box=None, priority_roi=None, profile_cascade=None):
     """Detect faces ONLY within priority_roi (magenta box). Strict boundaries.
     Returns list of (x, y, w, h) in full-frame coordinates."""
@@ -327,7 +353,28 @@ def detect_faces_in_crop(frame, face_cascade, person_box=None, priority_roi=None
     if roi_norm is None:
         return []
 
-    rx1, ry1, rx2, ry2 = roi_norm
+    # Narrow search area around the detected person's upper body when available.
+    # This avoids multiple false positives in a large doorway ROI.
+    search_rect = roi_norm
+    if person_box is not None:
+        px1, py1, px2, py2 = _normalize_rect(person_box, frame.shape[1], frame.shape[0])
+        pw = max(1, px2 - px1)
+        ph = max(1, py2 - py1)
+        upper_body_rect = _normalize_rect(
+            (
+                px1 - int(0.12 * pw),
+                py1,
+                px2 + int(0.12 * pw),
+                py1 + int(0.62 * ph),
+            ),
+            frame.shape[1],
+            frame.shape[0],
+        )
+        intersected = _rect_intersection(roi_norm, upper_body_rect)
+        if intersected is not None:
+            search_rect = intersected
+
+    rx1, ry1, rx2, ry2 = search_rect
     roi = gray[ry1:ry2, rx1:rx2]
 
     if roi.size == 0:
@@ -348,7 +395,7 @@ def detect_faces_in_crop(frame, face_cascade, person_box=None, priority_roi=None
             roi, scaleFactor=1.05, minNeighbors=1, minSize=(15, 15)
         )
 
-    # Return detections fully inside the ROI
+    # Return detections fully inside the search ROI.
     results = []
     for (fx, fy, fw, fh) in raw:
         face_x1 = rx1 + fx
@@ -357,6 +404,10 @@ def detect_faces_in_crop(frame, face_cascade, person_box=None, priority_roi=None
         face_y2 = face_y1 + fh
         if face_x1 >= rx1 and face_y1 >= ry1 and face_x2 <= rx2 and face_y2 <= ry2:
             results.append((face_x1, face_y1, fw, fh))
+
+    # Keep only the strongest candidate to avoid multiple face boxes per person.
+    if person_box is not None and results:
+        results = [max(results, key=lambda r: r[2] * r[3])]
 
     return results
 
@@ -767,8 +818,13 @@ def roi_setup(source, args):
 # Detection / counting loop
 # ---------------------------------------------------------------------------
 
-def post_event(backend_url, direction, employee_id=None, detected_name=None):
-    payload = {"employee_id": employee_id, "detected_name": detected_name, "type": direction}
+def post_event(backend_url, direction, employee_id=None, detected_name=None, face_image=None):
+    payload = {
+        "employee_id": employee_id,
+        "detected_name": detected_name,
+        "face_image": face_image,
+        "type": direction,
+    }
     try:
         response = requests.post(backend_url, json=payload, timeout=5)
         print(f"Posted event: {direction} -> {response.status_code}")
@@ -984,6 +1040,9 @@ def monitor(source, args):
             return 0
 
         no_frame_streak = 0
+        recent_crossings = []
+        crossing_dedupe_seconds = 2.5
+        crossing_dedupe_pixels = 90
         while True:
             ok, frame = stream.read()
             if not ok:
@@ -1043,6 +1102,28 @@ def monitor(source, args):
                 curr_side = 0 if ref_y < line_y else 1
                 if prev is not None and curr_side != prev:
                     direction = "in" if prev == 0 and curr_side == 1 else "out"
+
+                    # Suppress duplicate events caused by tracker fragmentation or
+                    # nearly identical re-detections of the same person.
+                    now_ts = time.time()
+                    recent_crossings = [
+                        item for item in recent_crossings
+                        if now_ts - item["ts"] <= crossing_dedupe_seconds
+                    ]
+                    is_duplicate_crossing = any(
+                        item["direction"] == direction and
+                        abs(item["x"] - ref_x) <= crossing_dedupe_pixels and
+                        abs(item["y"] - ref_y) <= crossing_dedupe_pixels
+                        for item in recent_crossings
+                    )
+                    if is_duplicate_crossing:
+                        print(
+                            f"Suppressed duplicate {direction.upper()} event for object {oid} "
+                            f"near ({ref_x}, {ref_y})"
+                        )
+                        tracker.prev_side[oid] = curr_side
+                        continue
+
                     if event_mode != "both" and direction != event_mode:
                         print(
                             f"Crossing detected for object {oid} as {direction.upper()}, "
@@ -1054,6 +1135,7 @@ def monitor(source, args):
                         count_in += 1
                     else:
                         count_out += 1
+                    recent_crossings.append({"ts": now_ts, "direction": direction, "x": ref_x, "y": ref_y})
                     ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     ts_ms = int(time.time() * 1000)
                     print(f"[{ts_str}] Person {direction.upper()}  (object {oid})  |  total IN={count_in} OUT={count_out}")
@@ -1125,6 +1207,7 @@ def monitor(source, args):
                     log_fh.flush()
 
                     # Save full-frame crossing snapshot with annotations (always, even in save_faces_only mode)
+                    captured_image_name = face_saved or ""
                     if crops_dir and frame is not None:
                         snap = frame.copy()
                         color = (0, 255, 0) if direction == "in" else (0, 0, 255)
@@ -1145,9 +1228,17 @@ def monitor(source, args):
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                         img_name = f"{direction}_{ts_ms}_{oid}.jpg"
                         cv2.imwrite(os.path.join(crops_dir, img_name), snap)
+                        if not captured_image_name:
+                            captured_image_name = img_name
 
                     if args.post:
-                        post_event(args.backend, direction, employee_id=employee_id, detected_name=employee_name or None)
+                        post_event(
+                            args.backend,
+                            direction,
+                            employee_id=employee_id,
+                            detected_name=employee_name or None,
+                            face_image=captured_image_name or None,
+                        )
                 tracker.prev_side[oid] = curr_side
 
             if display_enabled and frame is not None:

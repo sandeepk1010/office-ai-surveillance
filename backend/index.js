@@ -201,6 +201,7 @@ async function initDatabase() {
   `);
 
   await pool.query('ALTER TABLE entries ADD COLUMN IF NOT EXISTS detected_name TEXT');
+  await pool.query('ALTER TABLE entries ADD COLUMN IF NOT EXISTS face_image TEXT');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS usage (
@@ -293,8 +294,8 @@ app.post('/api/employees', async (req, res) => {
 app.get('/api/entries', async (req, res) => {
   try {
     const rows = await pool.query(
-      `SELECT e.id, e.employee_id, e.type, e.ts, emp.name AS employee_name
-              ,e.detected_name
+            `SELECT e.id, e.employee_id, e.type, e.ts, emp.name AS employee_name
+              ,e.detected_name, e.face_image
        FROM entries e
        LEFT JOIN employees emp ON emp.id = e.employee_id
         ORDER BY e.ts DESC`
@@ -306,7 +307,7 @@ app.get('/api/entries', async (req, res) => {
 });
 
 app.post('/api/entries', async (req, res) => {
-  const { employee_id, detected_name, type } = req.body;
+  const { employee_id, detected_name, type, face_image } = req.body;
   const ts = Date.now();
   const employeeId = employee_id === null || employee_id === undefined ? null : Number(employee_id);
 
@@ -318,10 +319,10 @@ app.post('/api/entries', async (req, res) => {
   try {
     await client.query('BEGIN');
     const result = await client.query(
-      `INSERT INTO entries (employee_id, detected_name, type, ts)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, employee_id, detected_name, type, ts`,
-      [employeeId, detected_name || null, type, ts]
+      `INSERT INTO entries (employee_id, detected_name, face_image, type, ts)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, employee_id, detected_name, face_image, type, ts`,
+      [employeeId, detected_name || null, face_image || null, type, ts]
     );
 
     await upsertDailyHistoryForEntry(client, result.rows[0]);
@@ -410,13 +411,13 @@ app.get('/api/dashboard', async (req, res) => {
       ),
       pool.query(
         `SELECT e.id, e.employee_id, e.type, e.ts, emp.name AS employee_name
-           ,e.detected_name
+           ,e.detected_name, e.face_image
          FROM entries e
          LEFT JOIN employees emp ON emp.id = e.employee_id
           ORDER BY e.ts DESC`
       ),
       pool.query(
-        `SELECT e.id, e.employee_id, e.type, e.ts, emp.name AS employee_name, e.detected_name
+        `SELECT e.id, e.employee_id, e.type, e.ts, emp.name AS employee_name, e.detected_name, e.face_image
          FROM entries e
          LEFT JOIN employees emp ON emp.id = e.employee_id
          WHERE e.ts >= $1

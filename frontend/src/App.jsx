@@ -58,6 +58,14 @@ function formatHours(value) {
   return `${value.toFixed(2)}h`
 }
 
+function buildCaptureUrl(faceImage) {
+  if (!faceImage) return null
+  const encoded = encodeURIComponent(faceImage)
+  const isFaceCrop = faceImage.startsWith('face_') || faceImage.startsWith('person_')
+  const basePath = isFaceCrop ? '/captures/faces/' : '/captures/crossings/'
+  return `${API_BASE_URL}${basePath}${encoded}`
+}
+
 function formatMonthDay(dateValue) {
   if (!dateValue) return '-'
   const d = new Date(dateValue)
@@ -718,17 +726,17 @@ export default function App() {
   const renderDetections = () => (
     <>
       <section className="panel">
-        <div className="panel-header"><h3>Recent Detection Images</h3><p>Detection snapshots moved out of dashboard</p></div>
-        {data.recentDetections?.length ? (
+        <div className="panel-header"><h3>Recent Full Detection Images</h3><p>Full-frame crossing captures from camera</p></div>
+        {(data.recentCrossings?.length || data.recentDetections?.length) ? (
           <div className="thumb-grid">
-            {data.recentDetections.map((img, idx) => (
+            {(data.recentCrossings?.length ? data.recentCrossings : data.recentDetections).map((img, idx) => (
               <a key={`${img.name}-${idx}`} href={`${API_BASE_URL}${img.url}`} target="_blank" rel="noreferrer" className="thumb-card">
                 <img src={`${API_BASE_URL}${img.url}`} alt={img.name} />
                 <span>{img.name}</span>
               </a>
             ))}
           </div>
-        ) : <p className="muted">No recent detection images.</p>}
+        ) : <p className="muted">No recent full detection images.</p>}
       </section>
       <section className="panel">
         <div className="panel-header"><h3>Recent Face Crops</h3><p>Detected faces captured from crossings</p></div>
@@ -755,6 +763,7 @@ export default function App() {
         ...p,
         unknownStatus: p.inOffice ? 'Unknown Present' : 'Unverified Visitor',
         lastSeenTs: p.timelineAsc?.length ? p.timelineAsc[p.timelineAsc.length - 1].ts : null,
+        faceImage: p.timelineAsc?.length ? (p.timelineAsc[p.timelineAsc.length - 1].face_image || null) : null,
       }))
       .sort((a, b) => (b.lastSeenTs || 0) - (a.lastSeenTs || 0))
 
@@ -828,7 +837,14 @@ export default function App() {
                   <div className="employee-meta">
                     <span>Events: {u.timelineAsc?.length || 0}</span>
                     <span>Last Seen: {u.lastSeenTs ? formatDateTime(u.lastSeenTs) : '-'}</span>
+                    <span>Face ID Captured: {u.faceImage || '-'}</span>
                   </div>
+                  {u.faceImage ? (
+                    <a href={buildCaptureUrl(u.faceImage)} target="_blank" rel="noreferrer" className="thumb-card" style={{ marginTop: '8px' }}>
+                      <img src={buildCaptureUrl(u.faceImage)} alt={u.faceImage} />
+                      <span>{u.faceImage}</span>
+                    </a>
+                  ) : null}
                   <div className="employee-foot">
                     <span className="status-badge status-unknown">{u.unknownStatus}</span>
                     <small>Action: verify face and map to employee</small>
