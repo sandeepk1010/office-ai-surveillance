@@ -1,0 +1,37 @@
+[Unit]
+Description=Office AI Surveillance Detector Service
+Documentation=https://github.com/yourorg/office-ai-surveillance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trinetra-jetson
+Group=trinetra-jetson
+WorkingDirectory=/home/trinetra-jetson/office-ai-surveillance
+EnvironmentFile=-/etc/default/office-ai-detector
+
+# Start detector with auto-restart
+ExecStart=/home/trinetra-jetson/office-ai-surveillance/detector-start.sh
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=office-ai-detector
+
+# Resource limits
+MemoryLimit=2G
+
+# Security (relaxed for camera access)
+NoNewPrivileges=false
+ProtectHome=false
+ReadWritePaths=/home/trinetra-jetson/office-ai-surveillance/python-scripts/crossings
+
+[Install]
+WantedBy=multi-user.target

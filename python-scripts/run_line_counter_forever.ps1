@@ -6,7 +6,7 @@ $ScriptPath = "C:\office-AI\python-scripts\line_counter.py"
 $RtspUrl = "rtsp://admin:India123#@192.168.2.103:554/cam/realmonitor?channel=2&subtype=0"
 $ModelPath = "C:\office-AI\python-scripts\yolov8n.pt"
 $RoiFile = "C:\office-AI\python-scripts\roi_cam2.json"
-$BackendUrl = "http://localhost:3000/api/entries"
+$BackendUrl = "http://localhost:3001/api/entries"
 $SaveCropsDir = "C:\office-AI\python-scripts\crossings"
 
 while ($true) {

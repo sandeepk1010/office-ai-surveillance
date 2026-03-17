@@ -2,7 +2,7 @@
 
 ## 1. Project Structure
 
-- backend: Node.js + Express + SQLite API server
+- backend: Node.js + Express + PostgreSQL API server
 - frontend: React + Vite dashboard UI
 - python-scripts: RTSP detection, line crossing, face/person capture, posting events to backend
 
@@ -71,13 +71,13 @@ File: `backend/package.json`
 
 - express: `^4.18.2`
 - cors: `^2.8.5`
-- sqlite3: `^5.1.6`
+- pg: `^8.13.1`
 
 ### Purpose
 
 - Express: REST API server
 - CORS: allows frontend access from different port
-- sqlite3: local database storage (`backend/data.db`)
+- pg: PostgreSQL client for API data storage
 
 ### Backend Commands
 
@@ -87,7 +87,7 @@ npm install
 npm start
 ```
 
-- Backend URL: `http://localhost:3000`
+- Backend URL: `http://localhost:3001`
 
 ### Main API Endpoints
 
@@ -204,3 +204,22 @@ Flags used above:
 - RTSP passwords containing `#` should be URL-safe encoded (`%23`) when needed.
 - Current pipeline automatically falls back to OpenCV capture if GStreamer frame read fails.
 - Keep credentials out of source files; use environment variables or secure config in production.
+
+# Status
+sudo systemctl status office-ai-detector
+
+# Start/Stop
+sudo systemctl start office-ai-detector
+sudo systemctl stop office-ai-detector
+
+# Live logs
+sudo journalctl -u office-ai-detector -f
+
+# Disable auto-boot
+sudo systemctl disable office-ai-detector
+
+cd /home/trinetra-jetson/office-ai-surveillance
+./start-all.sh
+
+sudo journalctl -u office-ai-detector -f
+# Watch for face detections and entries posted to API

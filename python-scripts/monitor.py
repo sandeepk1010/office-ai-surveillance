@@ -8,9 +8,10 @@ Usage:
 """
 import sys
 import json
+import os
 from urllib.request import urlopen, Request
 
-API = 'http://localhost:3000/api/dashboard'
+API = os.environ.get('DASHBOARD_API_URL', 'http://localhost:3001/api/dashboard')
 
 def fetch_dashboard():
     req = Request(API, headers={"User-Agent": "python-monitor/1.0"})

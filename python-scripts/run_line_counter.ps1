@@ -6,7 +6,7 @@ param(
   [double]$LineFraction = 0.45,
   [int]$MinArea = 500,
   [int]$MatchDistance = 60,
-  [string]$Backend = "http://localhost:3000/api/entries"
+  [string]$Backend = "http://localhost:3001/api/entries"
 )
 
 if ($Url) { $env:RTSP_URL = $Url }

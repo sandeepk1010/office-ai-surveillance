@@ -1,4 +1,5 @@
-const API = 'http://localhost:3000/api';
+const API_BASE_URL = window.__API_BASE_URL__ || 'http://localhost:3001';
+const API = `${API_BASE_URL}/api`;
 
 async function fetchDashboard() {
   const res = await fetch(API + '/dashboard');

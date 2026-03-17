@@ -218,7 +218,7 @@ def main():
                    help='Max distance to match centroids')
     p.add_argument('--post', action='store_true',
                    help='POST events to backend')
-    p.add_argument('--backend', default='http://localhost:3000/api/entries',
+    p.add_argument('--backend', default='http://localhost:3001/api/entries',
                    help='Backend entries endpoint')
     p.add_argument('--display', action='store_true',
                    help='Show video windows with overlays')

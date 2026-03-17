@@ -217,7 +217,7 @@ def monitor(source, args):
                     ts = int(time.time() * 1000)
                     print(f'Object {oid} crossed: {direction} at {ts}')
                     if args.post:
-                        post_event(args.backend or 'http://localhost:3000/api/entries', direction)
+                        post_event(args.backend or 'http://localhost:3001/api/entries', direction)
                 tracker.prev_side[oid] = curr_side
             
             # Display
