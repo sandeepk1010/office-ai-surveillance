@@ -14,6 +14,11 @@ DETECTOR_ROI_FILE="${DETECTOR_ROI_FILE:-${ROOT_DIR}/python-scripts/roi_cam2.json
 DETECTOR_LINE_MARGIN="${DETECTOR_LINE_MARGIN:-120}"
 DETECTOR_BACKEND="${DETECTOR_BACKEND:-http://localhost:${BACKEND_PORT}/api/entries}"
 DETECTOR_GSTREAMER_ONLY="${DETECTOR_GSTREAMER_ONLY:-false}"
+DETECTOR_DEVICE="${DETECTOR_DEVICE:-auto}"
+DETECTOR_FACE_RECOGNITION="${DETECTOR_FACE_RECOGNITION:-true}"
+DETECTOR_FACE_DB_DIR="${DETECTOR_FACE_DB_DIR:-${ROOT_DIR}/python-scripts/known_faces}"
+DETECTOR_EMPLOYEE_API="${DETECTOR_EMPLOYEE_API:-http://localhost:${BACKEND_PORT}/api/employees}"
+DETECTOR_FACE_MATCH_THRESHOLD="${DETECTOR_FACE_MATCH_THRESHOLD:-0.45}"
 
 # Optional OUT detector (second camera)
 DETECTOR_OUT_ENABLED="${DETECTOR_OUT_ENABLED:-false}"
@@ -95,12 +100,24 @@ if [[ "$DETECTOR_ENABLED" == "true" ]]; then
     else
       echo "Detector mode: GStreamer + OpenCV fallback"
     fi
+    if [[ "$DETECTOR_FACE_RECOGNITION" == "true" ]]; then
+      EXTRA_ARGS+=(
+        --face-recognition
+        --face-db-dir "$DETECTOR_FACE_DB_DIR"
+        --employee-api "$DETECTOR_EMPLOYEE_API"
+        --face-match-threshold "$DETECTOR_FACE_MATCH_THRESHOLD"
+      )
+      echo "Detector face recognition: enabled"
+    else
+      echo "Detector face recognition: disabled"
+    fi
 
     python3 python-scripts/line_counter.py \
       --url "$DETECTOR_RTSP_URL" \
       --model "$DETECTOR_MODEL" \
       --roi-file "$DETECTOR_ROI_FILE" \
       --event-mode in \
+      --device "$DETECTOR_DEVICE" \
       --line-x-margin "$DETECTOR_LINE_MARGIN" \
       --backend "$DETECTOR_BACKEND" \
       --post \

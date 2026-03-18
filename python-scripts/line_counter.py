@@ -13,8 +13,6 @@ import math
 import time
 import argparse
 import importlib
-import subprocess
-import shutil
 import threading
 from datetime import datetime
 from urllib.parse import quote, unquote
@@ -22,31 +20,14 @@ import cv2
 
 import numpy as np
 import requests
+from frame_sources import (
+    GStreamerCliFrameSource,
+    GStreamerFrameSource,
+    OpenCVFrameSource,
+    resolve_gst_launch_bin,
+)
 
 Gst = None
-
-
-def resolve_gst_launch_bin():
-    """Resolve gst-launch binary from env, PATH, or common Windows install paths."""
-    env_bin = os.environ.get("GST_LAUNCH_BIN")
-    if env_bin and os.path.isfile(env_bin):
-        return env_bin
-
-    on_path = shutil.which("gst-launch-1.0")
-    if on_path:
-        return on_path
-
-    candidates = [
-        r"C:\gstreamer\1.0\msvc_x86_64\bin\gst-launch-1.0.exe",
-        r"C:\gstreamer\1.0\mingw_x86_64\bin\gst-launch-1.0.exe",
-        r"C:\Program Files\gstreamer\1.0\msvc_x86_64\bin\gst-launch-1.0.exe",
-        r"C:\Program Files\gstreamer\1.0\mingw_x86_64\bin\gst-launch-1.0.exe",
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-
-    return None
 
 
 def euclid(a, b):
@@ -111,177 +92,9 @@ class SimpleTracker:
         return dict(self.objects)
 
 
-class GStreamerFrameSource:
-    def __init__(self, source, width, height, is_rtsp):
-        self.source = source
-        self.width = width
-        self.height = height
-        self.is_rtsp = is_rtsp
-        self.pipeline = None
-        self.sink = None
-
-    def _build_pipeline(self, use_hw_decoder=True):
-        if self.is_rtsp:
-            if use_hw_decoder:
-                # Jetson hardware HEVC decoder (nvv4l2decoder + nvvidconv)
-                return (
-                    f'rtspsrc location="{self.source}" protocols=tcp latency=50 '
-                    '! rtph265depay ! h265parse '
-                    '! nvv4l2decoder ! nvvidconv '
-                    f'! video/x-raw,format=BGRx,width={self.width},height={self.height} '
-                    '! videoconvert ! video/x-raw,format=BGR '
-                    '! appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true'
-                )
-            # Software HEVC decoder fallback (avdec_h265)
-            return (
-                f'rtspsrc location="{self.source}" protocols=tcp latency=50 '
-                '! rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! videoscale '
-                f'! video/x-raw,format=BGR,width={self.width},height={self.height} '
-                '! appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true'
-            )
-
-        escaped_path = self.source.replace("\\", "\\\\")
-        return (
-            f'filesrc location="{escaped_path}" ! decodebin ! videoconvert '
-            f"! video/x-raw,format=BGR,width={self.width},height={self.height} "
-            "! appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true"
-        )
-
-    def open(self):
-        for use_hw in (True, False):
-            pipeline_str = self._build_pipeline(use_hw_decoder=use_hw)
-            self.pipeline = Gst.parse_launch(pipeline_str)
-            self.sink = self.pipeline.get_by_name("sink")
-            if self.sink is None:
-                self.pipeline.set_state(Gst.State.NULL)
-                continue
-            self.pipeline.set_state(Gst.State.PLAYING)
-            ret, _state, _pending = self.pipeline.get_state(3 * Gst.SECOND)
-            if ret in (Gst.StateChangeReturn.SUCCESS, Gst.StateChangeReturn.ASYNC):
-                label = "hardware (nvv4l2decoder)" if use_hw else "software (avdec_h265)"
-                print(f"[GStreamer] Pipeline PLAYING with {label}", flush=True)
-                return
-            self.pipeline.set_state(Gst.State.NULL)
-        raise RuntimeError("Failed to initialize GStreamer appsink (tried hw + sw HEVC decoders)")
-
-    def read(self):
-        # Some PyGObject builds do not expose try_pull_sample directly.
-        if hasattr(self.sink, "try_pull_sample"):
-            sample = self.sink.try_pull_sample(500 * Gst.MSECOND)
-        else:
-            sample = self.sink.emit("try-pull-sample", 500 * Gst.MSECOND)
-        if sample is None:
-            return False, None
-
-        buf = sample.get_buffer()
-        caps = sample.get_caps().get_structure(0)
-        width = caps.get_value("width")
-        height = caps.get_value("height")
-
-        ok, map_info = buf.map(Gst.MapFlags.READ)
-        if not ok:
-            return False, None
-
-        try:
-            frame = np.frombuffer(map_info.data, dtype=np.uint8)
-            frame = frame.reshape((height, width, 3))
-            return True, frame
-        finally:
-            buf.unmap(map_info)
-
-    def close(self):
-        if self.pipeline is not None:
-            self.pipeline.set_state(Gst.State.NULL)
-
-
-class GStreamerCliFrameSource:
-    def __init__(self, source, width, height, is_rtsp, gst_launch_bin):
-        self.source = source
-        self.width = width
-        self.height = height
-        self.is_rtsp = is_rtsp
-        self.gst_launch_bin = gst_launch_bin
-        self.proc = None
-
-    def _build_command(self):
-        if self.is_rtsp:
-            return [
-                self.gst_launch_bin, "-q",
-                "rtspsrc", f"location={self.source}", "protocols=tcp", "latency=200",
-                "!", "rtph265depay",
-                "!", "h265parse",
-                "!", "avdec_h265",
-                "!", "videoconvert",
-                "!", f"video/x-raw,format=BGR,width={self.width},height={self.height}",
-                "!", "fdsink", "fd=1",
-            ]
-        else:
-            escaped_path = self.source.replace("\\", "/")
-            return [
-                self.gst_launch_bin, "-q",
-                "filesrc", f"location={escaped_path}",
-                "!", "decodebin",
-                "!", "videoconvert",
-                "!", f"video/x-raw,format=BGR,width={self.width},height={self.height}",
-                "!", "fdsink", "fd=1",
-            ]
-
-    def open(self):
-        cmd = self._build_command()
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    def read(self):
-        frame_size = self.width * self.height * 3
-        if self.proc is None or self.proc.stdout is None:
-            return False, None
-        frame_data = self.proc.stdout.read(frame_size)
-        if len(frame_data) < frame_size:
-            return False, None
-        frame = np.frombuffer(frame_data, dtype=np.uint8).reshape((self.height, self.width, 3))
-        return True, frame
-
-    def close(self):
-        if self.proc is not None:
-            self.proc.terminate()
-
-
-class OpenCVFrameSource:
-    """Fallback frame source using cv2.VideoCapture (FFmpeg backend when possible)."""
-
-    def __init__(self, source, width, height, is_rtsp):
-        self.source = source
-        self.width = width
-        self.height = height
-        self.is_rtsp = is_rtsp
-        self.cap = None
-
-    def open(self):
-        src = _sanitize_rtsp_for_cv2(self.source) if self.is_rtsp else self.source
-        self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
-        if not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(src)
-        if not self.cap.isOpened():
-            raise RuntimeError("OpenCV VideoCapture could not open source")
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-    def read(self):
-        if self.cap is None:
-            return False, None
-        ok, frame = self.cap.read()
-        if not ok or frame is None:
-            return False, None
-        if frame.shape[1] != self.width or frame.shape[0] != self.height:
-            frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
-        return True, frame
-
-    def close(self):
-        if self.cap is not None:
-            self.cap.release()
-
-
-def detect_person_centroids(model, frame, conf_threshold):
+def detect_person_centroids(model, frame, conf_threshold, device):
     """Returns (centroids, raw_boxes) where raw_boxes is list of (x1,y1,x2,y2) ints."""
-    results = model.predict(frame, classes=[0], conf=conf_threshold, verbose=False)
+    results = model.predict(frame, classes=[0], conf=conf_threshold, verbose=False, device=device)
     boxes = results[0].boxes
     centroids = []
     raw_boxes = []
@@ -405,9 +218,44 @@ def detect_faces_in_crop(frame, face_cascade, person_box=None, priority_roi=None
         if face_x1 >= rx1 and face_y1 >= ry1 and face_x2 <= rx2 and face_y2 <= ry2:
             results.append((face_x1, face_y1, fw, fh))
 
-    # Keep only the strongest candidate to avoid multiple face boxes per person.
+    # Reject false positives and keep one best face per person.
     if person_box is not None and results:
-        results = [max(results, key=lambda r: r[2] * r[3])]
+        px1, py1, px2, py2 = _normalize_rect(person_box, frame.shape[1], frame.shape[0])
+        pw = max(1, px2 - px1)
+        ph = max(1, py2 - py1)
+        head_center_x = px1 + 0.5 * pw
+        head_center_y = py1 + 0.25 * ph
+
+        valid = []
+        for (fx, fy, fw, fh) in results:
+            cx = fx + fw / 2.0
+            cy = fy + fh / 2.0
+            ar = fw / float(max(1, fh))
+            rel_w = fw / float(pw)
+            rel_h = fh / float(ph)
+            rel_top = (fy - py1) / float(ph)
+
+            # Human-face-like geometry + expected head region.
+            if ar < 0.70 or ar > 1.55:
+                continue
+            if rel_w < 0.12 or rel_w > 0.62:
+                continue
+            if rel_h < 0.10 or rel_h > 0.60:
+                continue
+            if rel_top < -0.05 or rel_top > 0.60:
+                continue
+
+            dist = ((cx - head_center_x) ** 2 + (cy - head_center_y) ** 2) ** 0.5
+            size_score = fw * fh
+            pos_penalty = dist * 1.7
+            score = size_score - pos_penalty
+            valid.append((score, (fx, fy, fw, fh)))
+
+        if valid:
+            valid.sort(key=lambda item: item[0], reverse=True)
+            results = [valid[0][1]]
+        else:
+            results = []
 
     return results
 
@@ -971,13 +819,25 @@ def monitor(source, args):
     count_out = 0
 
     ultralytics = importlib.import_module("ultralytics")
+    torch = importlib.import_module("torch")
+
+    requested_device = str(getattr(args, "device", "auto")).strip().lower()
+    if requested_device == "auto":
+        infer_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    else:
+        infer_device = requested_device
+        if requested_device.startswith("cuda") and not torch.cuda.is_available():
+            print("CUDA requested but unavailable in current PyTorch build; falling back to CPU.")
+            infer_device = "cpu"
+
+    print(f"YOLO inference device: {infer_device}")
     model = ultralytics.YOLO(args.model)
     tracker = SimpleTracker(max_lost=30, max_distance=args.match_distance)
 
     save_preview = getattr(args, "save_preview", None)
     stream = None
     if Gst is not None:
-        stream = GStreamerFrameSource(source, args.width, args.height, is_rtsp)
+        stream = GStreamerFrameSource(source, args.width, args.height, is_rtsp, Gst)
     else:
         gst_launch_bin = resolve_gst_launch_bin()
         if not gst_launch_bin:
@@ -1057,7 +917,7 @@ def monitor(source, args):
 
             no_frame_streak = 0
 
-            centroids, raw_boxes = detect_person_centroids(model, frame, args.conf)
+            centroids, raw_boxes = detect_person_centroids(model, frame, args.conf, infer_device)
             centroid_box_map = {c: b for c, b in zip(centroids, raw_boxes)}
 
             # Optional capture on any person detection (independent of line crossing).
@@ -1381,6 +1241,8 @@ def main():
                         help="Backend employees endpoint used to map recognized names to employee IDs")
     parser.add_argument("--face-match-threshold", type=float, default=0.45,
                         help="Lower is stricter for face matching (typical range 0.35-0.60)")
+    parser.add_argument("--device", default="auto",
+                        help="YOLO inference device: auto, cpu, cuda, cuda:0")
     parser.add_argument("--min-area", type=int, default=500, help="Deprecated; kept for CLI compatibility")
     args = parser.parse_args()
 

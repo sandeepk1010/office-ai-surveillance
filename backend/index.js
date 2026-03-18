@@ -29,7 +29,6 @@ const DUMMY_EMPLOYEES = [
   ['EMP016', 'Keerthi S', 'Engineering', '9876501016', '1995-04-26', '2022-05-05', false, null],
   ['EMP017', 'Rahul Dev', 'Sales', '9876501017', '1993-04-28', '2020-05-07', false, null],
   ['EMP018', 'Pooja Sharma', 'Admin', '9876501018', '1991-04-30', '2018-05-09', false, null],
-  ['EMP019', 'Farhan Ali', 'IT Support', '9876501019', '1994-05-02', '2021-05-11', false, null],
   ['EMP020', 'Lakshmi K', 'HR', '9876501020', '1992-05-04', '2017-05-13', true, 'Maternity leave'],
 ];
 
@@ -508,7 +507,7 @@ app.get('/api/health', async (req, res) => {
     latency: null,
   });
 
-  // 4. Read last 10 min of journal for pipeline details
+  // 4. Read recent journal for pipeline details
   let journal = '';
   try {
     journal = execSync('journalctl -u office-ai-detector --since "30 min ago" --no-pager 2>/dev/null', {
@@ -516,6 +515,9 @@ app.get('/api/health', async (req, res) => {
       maxBuffer: 512 * 1024,
     }).toString();
   } catch (_) {}
+
+  const framesMatches = [...journal.matchAll(/frames=(\d+) \| detections=(\d+) tracked=(\d+) \| IN=(\d+) OUT=(\d+)/g)];
+  const hasFrames = framesMatches.length > 0;
 
   // 5. GStreamer pipeline
   const gstLines = [...journal.matchAll(/\[GStreamer\] Pipeline PLAYING with (.+)/g)];
@@ -527,6 +529,13 @@ app.get('/api/health', async (req, res) => {
       name: 'GStreamer Pipeline',
       status: 'ok',
       note: `PLAYING · ${lastGstDecoder}${isHw ? ' ✓ Jetson HW' : ''}`,
+      latency: null,
+    });
+  } else if (hasFrames && !opencvFallback) {
+    services.push({
+      name: 'GStreamer Pipeline',
+      status: 'ok',
+      note: 'Streaming via GStreamer · startup log older than 30 min',
       latency: null,
     });
   } else if (opencvFallback) {
@@ -550,7 +559,6 @@ app.get('/api/health', async (req, res) => {
   }
 
   // 7. YOLO / Frame processing
-  const framesMatches = [...journal.matchAll(/frames=(\d+) \| detections=(\d+) tracked=(\d+) \| IN=(\d+) OUT=(\d+)/g)];
   if (framesMatches.length > 0) {
     const last = framesMatches[framesMatches.length - 1];
     services.push({
@@ -566,7 +574,6 @@ app.get('/api/health', async (req, res) => {
   }
 
   // 8. RTSP Camera
-  const hasFrames = framesMatches.length > 0;
   const hasBadCseq = /bad cseq/i.test(journal);
   const hasRtspError = /RTSP.*error|connection refused/i.test(journal);
   services.push({
