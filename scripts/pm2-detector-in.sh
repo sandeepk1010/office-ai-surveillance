@@ -16,7 +16,7 @@ if [[ "${DETECTOR_ENABLED:-true}" != "true" ]]; then
 fi
 
 EXTRA_ARGS=()
-if [[ "${DETECTOR_GSTREAMER_ONLY:-false}" == "true" ]]; then
+if [[ "${DETECTOR_GSTREAMER_ONLY:-true}" == "true" ]]; then
   EXTRA_ARGS+=(--gstreamer-only)
 fi
 if [[ "${DETECTOR_FACE_RECOGNITION:-true}" == "true" ]]; then
@@ -34,7 +34,9 @@ exec python3 python-scripts/line_counter.py \
   --model "${DETECTOR_MODEL:-$ROOT_DIR/python-scripts/yolov8n.pt}" \
   --roi-file "${DETECTOR_ROI_FILE:-$ROOT_DIR/python-scripts/roi_cam2.json}" \
   --event-mode in \
-  --device "${DETECTOR_DEVICE:-auto}" \
+  --device "${DETECTOR_DEVICE:-cuda:0}" \
+  --yolo-imgsz "${DETECTOR_YOLO_IMGSZ:-640}" \
+  --yolo-half "${DETECTOR_YOLO_HALF:-auto}" \
   --line-x-margin "${DETECTOR_LINE_MARGIN:-120}" \
   --backend "${DETECTOR_BACKEND:-http://localhost:3001/api/entries}" \
   --post \

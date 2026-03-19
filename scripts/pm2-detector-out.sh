@@ -16,7 +16,7 @@ if [[ "${DETECTOR_OUT_ENABLED:-false}" != "true" ]]; then
 fi
 
 EXTRA_ARGS=()
-if [[ "${DETECTOR_OUT_GSTREAMER_ONLY:-false}" == "true" ]]; then
+if [[ "${DETECTOR_OUT_GSTREAMER_ONLY:-true}" == "true" ]]; then
   EXTRA_ARGS+=(--gstreamer-only)
 fi
 
@@ -26,6 +26,9 @@ exec python3 python-scripts/line_counter.py \
   --model "${DETECTOR_OUT_MODEL:-$ROOT_DIR/python-scripts/yolov8n.pt}" \
   --roi-file "${DETECTOR_OUT_ROI_FILE:-$ROOT_DIR/python-scripts/roi_cam_out.json}" \
   --event-mode out \
+  --device "${DETECTOR_OUT_DEVICE:-${DETECTOR_DEVICE:-cuda:0}}" \
+  --yolo-imgsz "${DETECTOR_OUT_YOLO_IMGSZ:-${DETECTOR_YOLO_IMGSZ:-640}}" \
+  --yolo-half "${DETECTOR_OUT_YOLO_HALF:-${DETECTOR_YOLO_HALF:-auto}}" \
   --line-x-margin "${DETECTOR_OUT_LINE_MARGIN:-120}" \
   --backend "${DETECTOR_OUT_BACKEND:-http://localhost:3001/api/entries}" \
   --post \

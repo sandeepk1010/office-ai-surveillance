@@ -92,9 +92,17 @@ class SimpleTracker:
         return dict(self.objects)
 
 
-def detect_person_centroids(model, frame, conf_threshold, device):
+def detect_person_centroids(model, frame, conf_threshold, device, imgsz=640, use_half=False):
     """Returns (centroids, raw_boxes) where raw_boxes is list of (x1,y1,x2,y2) ints."""
-    results = model.predict(frame, classes=[0], conf=conf_threshold, verbose=False, device=device)
+    results = model.predict(
+        frame,
+        classes=[0],
+        conf=conf_threshold,
+        verbose=False,
+        device=device,
+        imgsz=imgsz,
+        half=use_half,
+    )
     boxes = results[0].boxes
     centroids = []
     raw_boxes = []
@@ -832,6 +840,18 @@ def monitor(source, args):
 
     print(f"YOLO inference device: {infer_device}")
     model = ultralytics.YOLO(args.model)
+
+    half_mode = str(getattr(args, "yolo_half", "auto")).strip().lower()
+    use_half = False
+    if infer_device.startswith("cuda"):
+        if half_mode in ("auto", "true", "1", "yes"):
+            use_half = True
+    elif half_mode in ("true", "1", "yes"):
+        print("YOLO FP16 requested, but CUDA is unavailable; using FP32.")
+
+    print(f"YOLO precision: {'FP16' if use_half else 'FP32'}")
+    print(f"YOLO image size: {args.yolo_imgsz}")
+
     tracker = SimpleTracker(max_lost=30, max_distance=args.match_distance)
 
     save_preview = getattr(args, "save_preview", None)
@@ -925,7 +945,14 @@ def monitor(source, args):
 
             no_frame_streak = 0
 
-            centroids, raw_boxes = detect_person_centroids(model, frame, args.conf, infer_device)
+            centroids, raw_boxes = detect_person_centroids(
+                model,
+                frame,
+                args.conf,
+                infer_device,
+                imgsz=args.yolo_imgsz,
+                use_half=use_half,
+            )
             centroid_box_map = {c: b for c, b in zip(centroids, raw_boxes)}
 
             # Optional capture on any person detection (independent of line crossing).
@@ -1251,6 +1278,10 @@ def main():
                         help="Lower is stricter for face matching (typical range 0.35-0.60)")
     parser.add_argument("--device", default="auto",
                         help="YOLO inference device: auto, cpu, cuda, cuda:0")
+    parser.add_argument("--yolo-imgsz", type=int, default=640,
+                        help="YOLO inference size (lower can reduce GPU load and increase FPS)")
+    parser.add_argument("--yolo-half", default="auto",
+                        help="Use FP16 for YOLO on CUDA: auto, true, false")
     parser.add_argument("--min-area", type=int, default=500, help="Deprecated; kept for CLI compatibility")
     args = parser.parse_args()
 

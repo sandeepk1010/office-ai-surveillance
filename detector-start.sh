@@ -8,13 +8,19 @@ MODEL_PATH="${DETECTOR_IN_MODEL:-python-scripts/yolov8n.pt}"
 ROI_FILE="${DETECTOR_IN_ROI_FILE:-python-scripts/roi_cam2.json}"
 LINE_X_MARGIN="${DETECTOR_IN_LINE_X_MARGIN:-120}"
 BACKEND_URL="${DETECTOR_IN_BACKEND:-http://localhost:3001/api/entries}"
-DEVICE="${DETECTOR_IN_DEVICE:-auto}"
+DEVICE="${DETECTOR_IN_DEVICE:-cuda:0}"
+YOLO_IMGSZ="${DETECTOR_IN_YOLO_IMGSZ:-640}"
+YOLO_HALF="${DETECTOR_IN_YOLO_HALF:-auto}"
+GSTREAMER_ONLY="${DETECTOR_IN_GSTREAMER_ONLY:-true}"
 FACE_DB_DIR="${DETECTOR_IN_FACE_DB_DIR:-python-scripts/known_faces}"
 EMPLOYEE_API="${DETECTOR_IN_EMPLOYEE_API:-http://localhost:3001/api/employees}"
 FACE_MATCH_THRESHOLD="${DETECTOR_IN_FACE_MATCH_THRESHOLD:-0.45}"
 FACE_RECOGNITION_ENABLED="${DETECTOR_IN_FACE_RECOGNITION_ENABLED:-true}"
 
 FACE_RECOGNITION_ARGS=()
+if [[ "${GSTREAMER_ONLY}" == "true" ]]; then
+  FACE_RECOGNITION_ARGS+=(--gstreamer-only)
+fi
 if [[ "${FACE_RECOGNITION_ENABLED}" == "true" ]]; then
   FACE_RECOGNITION_ARGS+=(
     --face-recognition
@@ -30,6 +36,8 @@ exec /usr/bin/python3 -u python-scripts/line_counter.py \
   --roi-file "$ROI_FILE" \
   --event-mode in \
   --device "$DEVICE" \
+  --yolo-imgsz "$YOLO_IMGSZ" \
+  --yolo-half "$YOLO_HALF" \
   --line-x-margin "$LINE_X_MARGIN" \
   --backend "$BACKEND_URL" \
   --post \
