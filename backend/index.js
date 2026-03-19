@@ -3,6 +3,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/office_ai';
 const pool = new Pool({ connectionString: DATABASE_URL });
@@ -488,33 +489,71 @@ app.get('/api/health', async (req, res) => {
     services.push({ name: 'PostgreSQL', status: 'error', note: e.message, latency: null });
   }
 
-  // 3. Detector systemd service
+  // 3. Detector runtime (systemd preferred, PM2 fallback)
   let serviceActive = false;
   let servicePid = null;
-  try {
-    execSync('systemctl is-active --quiet office-ai-detector', { timeout: 3000 });
-    serviceActive = true;
+  let detectorRuntime = 'none';
+  let detectorServiceName = null;
+
+  const systemdCandidates = ['office-ai-detector', 'office-ai-detector.service'];
+  for (const candidate of systemdCandidates) {
     try {
-      servicePid = execSync('systemctl show office-ai-detector --property=MainPID --value', { timeout: 2000 }).toString().trim();
+      execSync(`systemctl is-active --quiet ${candidate}`, { timeout: 3000 });
+      serviceActive = true;
+      detectorRuntime = 'systemd';
+      detectorServiceName = candidate;
+      try {
+        servicePid = execSync(`systemctl show ${candidate} --property=MainPID --value`, { timeout: 2000 }).toString().trim();
+      } catch (_) {}
+      break;
     } catch (_) {}
-  } catch (_) {
-    serviceActive = false;
   }
+
+  if (!serviceActive) {
+    try {
+      const pm2Raw = execSync('pm2 jlist', { timeout: 5000, maxBuffer: 1024 * 1024 }).toString();
+      const pm2List = JSON.parse(pm2Raw);
+      const detectorProc = pm2List.find((proc) => proc?.name === 'detector-in' || proc?.name === 'office-ai-detector');
+      if (detectorProc?.pm2_env?.status === 'online') {
+        serviceActive = true;
+        detectorRuntime = 'pm2';
+        servicePid = String(detectorProc.pid || detectorProc.pm_id || '').trim() || null;
+      }
+    } catch (_) {}
+  }
+
   services.push({
     name: 'Detector Service (systemd)',
     status: serviceActive ? 'ok' : 'error',
-    note: serviceActive ? `Active · PID ${servicePid}` : 'office-ai-detector.service not active',
+    note:
+      detectorRuntime === 'systemd'
+        ? `Active · PID ${servicePid || 'n/a'} (${detectorServiceName})`
+        : detectorRuntime === 'pm2'
+        ? `PM2 detector-in online · PID ${servicePid || 'n/a'}`
+        : 'office-ai-detector.service not active',
     latency: null,
   });
 
-  // 4. Read recent journal for pipeline details
+  // 4. Read recent logs for pipeline details
   let journal = '';
-  try {
-    journal = execSync('journalctl -u office-ai-detector --since "30 min ago" --no-pager 2>/dev/null', {
-      timeout: 6000,
-      maxBuffer: 512 * 1024,
-    }).toString();
-  } catch (_) {}
+  if (detectorRuntime === 'systemd') {
+    try {
+      journal = execSync(`journalctl -u ${detectorServiceName} --since "30 min ago" --no-pager 2>/dev/null`, {
+        timeout: 6000,
+        maxBuffer: 512 * 1024,
+      }).toString();
+    } catch (_) {}
+  } else if (detectorRuntime === 'pm2') {
+    try {
+      const pm2OutLog = path.join(os.homedir(), '.pm2', 'logs', 'detector-in-out.log');
+      if (fs.existsSync(pm2OutLog)) {
+        journal = execSync(`tail -n 1200 ${JSON.stringify(pm2OutLog)}`, {
+          timeout: 3000,
+          maxBuffer: 512 * 1024,
+        }).toString();
+      }
+    } catch (_) {}
+  }
 
   const framesMatches = [...journal.matchAll(/frames=(\d+) \| detections=(\d+) tracked=(\d+) \| IN=(\d+) OUT=(\d+)/g)];
   const hasFrames = framesMatches.length > 0;

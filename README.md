@@ -24,13 +24,18 @@ npm run dev -- --host 0.0.0.0 --port 5173
 
 3. Open `http://localhost:5173`
 
-One-command helpers (from project root):
+PM2 service commands (from project root):
 
 ```bash
 ./start-all.sh
 ./check-health.sh
 ./stop-all.sh
+pm2 status
+pm2 logs
+pm2 monit
 ```
+
+The PM2 process definitions live in `ecosystem.config.js`.
 
 Dual camera entry/exit (recommended):
 
@@ -60,18 +65,23 @@ sudo nano /etc/default/office-ai-detector-out
 sudo systemctl restart office-ai-detector office-ai-detector-out
 ```
 
-Local run with `start-all.sh`:
+Enable OUT detector with env file (`python-scripts/.env`):
 
 ```bash
-DETECTOR_OUT_ENABLED=true \
-DETECTOR_OUT_RTSP_URL='rtsp://admin:India123%23@YOUR_OUT_CAM_IP:554/cam/realmonitor?channel=1&subtype=0' \
-DETECTOR_OUT_ROI_FILE='python-scripts/roi_cam_out.json' \
+# edit python-scripts/.env first
+DETECTOR_OUT_ENABLED=true
+DETECTOR_OUT_RTSP_URL='rtsp://admin:India123%23@YOUR_OUT_CAM_IP:554/cam/realmonitor?channel=1&subtype=0'
+DETECTOR_OUT_ROI_FILE='python-scripts/roi_cam_out.json'
+
+# then restart PM2 apps
+./stop-all.sh
 ./start-all.sh
 ```
 
 Environment files:
 - `backend/.env.example` contains `PORT=3001`
 - `frontend/.env` and `frontend/.env.example` contain `VITE_API_BASE_URL=http://localhost:3001`
+- `python-scripts/.env` and `python-scripts/.env.example` contain detector runtime settings
 
 Windows (PowerShell) backend example:
 

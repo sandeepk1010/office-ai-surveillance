@@ -873,7 +873,15 @@ def monitor(source, args):
         return cv_stream
 
     try:
-        stream.open()
+        try:
+            stream.open()
+        except Exception as exc:
+            if is_rtsp and not gstreamer_only:
+                print(f"GStreamer open failed: {exc}")
+                print("Falling back to OpenCV RTSP capture at startup...")
+                stream = _switch_to_opencv(stream)
+            else:
+                raise
 
         if save_preview:
             print("Capturing preview frame...")

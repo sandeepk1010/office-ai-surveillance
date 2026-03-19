@@ -67,25 +67,31 @@ class GStreamerFrameSource:
         self.pipeline = None
         self.sink = None
 
-    def _build_pipeline(self, use_hw_decoder=True):
-        if self.is_rtsp:
-            if use_hw_decoder:
-                # Jetson hardware HEVC decoder (nvv4l2decoder + nvvidconv)
-                return (
-                    f'rtspsrc location="{self.source}" protocols=tcp latency=50 '
-                    '! rtph265depay ! h265parse '
-                    '! nvv4l2decoder ! nvvidconv '
-                    f'! video/x-raw,format=BGRx,width={self.width},height={self.height} '
-                    '! videoconvert ! video/x-raw,format=BGR '
-                    '! appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true'
-                )
-            # Software HEVC decoder fallback (avdec_h265)
+    def _build_rtsp_pipeline(self, codec, use_hw_decoder=True):
+        depay = "rtph264depay" if codec == "h264" else "rtph265depay"
+        parse = "h264parse" if codec == "h264" else "h265parse"
+        sw_dec = "avdec_h264" if codec == "h264" else "avdec_h265"
+
+        if use_hw_decoder:
             return (
-                f'rtspsrc location="{self.source}" protocols=tcp latency=50 '
-                '! rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! videoscale '
-                f'! video/x-raw,format=BGR,width={self.width},height={self.height} '
-                '! appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true'
+                f'rtspsrc location="{self.source}" protocols=tcp latency=200 '
+                f'! rtpjitterbuffer ! {depay} ! {parse} '
+                '! nvv4l2decoder ! nvvidconv '
+                '! video/x-raw,format=BGRx '
+                '! videoconvert ! video/x-raw,format=BGR '
+                '! appsink name=sink sync=false max-buffers=1 drop=true'
             )
+
+        return (
+            f'rtspsrc location="{self.source}" protocols=tcp latency=200 '
+            f'! rtpjitterbuffer ! {depay} ! {parse} ! {sw_dec} ! videoconvert ! videoscale '
+            f'! video/x-raw,format=BGR,width={self.width},height={self.height} '
+            '! appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true'
+        )
+
+    def _build_pipeline(self, use_hw_decoder=True, codec="h264"):
+        if self.is_rtsp:
+            return self._build_rtsp_pipeline(codec=codec, use_hw_decoder=use_hw_decoder)
 
         escaped_path = self.source.replace("\\", "\\\\")
         return (
@@ -94,22 +100,53 @@ class GStreamerFrameSource:
             "! appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true"
         )
 
+    def _get_pipeline_error(self):
+        if self.pipeline is None:
+            return None
+        bus = self.pipeline.get_bus()
+        if bus is None:
+            return None
+        msg = bus.timed_pop_filtered(
+            0,
+            self.gst.MessageType.ERROR | self.gst.MessageType.WARNING,
+        )
+        if msg is None:
+            return None
+        if msg.type == self.gst.MessageType.ERROR:
+            err, debug = msg.parse_error()
+            return f"ERROR: {err}; debug={debug}"
+        if msg.type == self.gst.MessageType.WARNING:
+            warn, debug = msg.parse_warning()
+            return f"WARNING: {warn}; debug={debug}"
+        return None
+
     def open(self):
-        for use_hw in (True, False):
-            pipeline_str = self._build_pipeline(use_hw_decoder=use_hw)
+        attempts = [
+            ("h264", True),
+            ("h264", False),
+            ("h265", True),
+            ("h265", False),
+        ]
+
+        for codec, use_hw in attempts:
+            pipeline_str = self._build_pipeline(use_hw_decoder=use_hw, codec=codec)
             self.pipeline = self.gst.parse_launch(pipeline_str)
             self.sink = self.pipeline.get_by_name("sink")
             if self.sink is None:
+                print(f"[GStreamer] Missing appsink for {codec} {'hw' if use_hw else 'sw'} pipeline", flush=True)
                 self.pipeline.set_state(self.gst.State.NULL)
                 continue
             self.pipeline.set_state(self.gst.State.PLAYING)
             ret, _state, _pending = self.pipeline.get_state(3 * self.gst.SECOND)
             if ret in (self.gst.StateChangeReturn.SUCCESS, self.gst.StateChangeReturn.ASYNC):
-                label = "hardware (nvv4l2decoder)" if use_hw else "software (avdec_h265)"
+                label = "hardware (nvv4l2decoder)" if use_hw else f"software (avdec_{codec})"
                 print(f"[GStreamer] Pipeline PLAYING with {label}", flush=True)
                 return
+            err = self._get_pipeline_error()
+            if err:
+                print(f"[GStreamer] Failed {codec} {'hw' if use_hw else 'sw'}: {err}", flush=True)
             self.pipeline.set_state(self.gst.State.NULL)
-        raise RuntimeError("Failed to initialize GStreamer appsink (tried hw + sw HEVC decoders)")
+        raise RuntimeError("Failed to initialize GStreamer appsink (tried h264/h265 with hw + sw decoders)")
 
     def read(self):
         # Some PyGObject builds do not expose try_pull_sample directly.
@@ -150,14 +187,18 @@ class GStreamerCliFrameSource:
         self.gst_launch_bin = gst_launch_bin
         self.proc = None
 
-    def _build_command(self):
+    def _build_command(self, codec="h264"):
         if self.is_rtsp:
+            depay = "rtph264depay" if codec == "h264" else "rtph265depay"
+            parse = "h264parse" if codec == "h264" else "h265parse"
+            sw_dec = "avdec_h264" if codec == "h264" else "avdec_h265"
             return [
                 self.gst_launch_bin, "-q",
                 "rtspsrc", f"location={self.source}", "protocols=tcp", "latency=200",
-                "!", "rtph265depay",
-                "!", "h265parse",
-                "!", "avdec_h265",
+                "!", "rtpjitterbuffer",
+                "!", depay,
+                "!", parse,
+                "!", sw_dec,
                 "!", "videoconvert",
                 "!", f"video/x-raw,format=BGR,width={self.width},height={self.height}",
                 "!", "fdsink", "fd=1",
@@ -174,8 +215,35 @@ class GStreamerCliFrameSource:
         ]
 
     def open(self):
-        cmd = self._build_command()
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not self.is_rtsp:
+            cmd = self._build_command()
+            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return
+
+        last_err = None
+        for codec in ("h264", "h265"):
+            cmd = self._build_command(codec=codec)
+            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # Validate quickly by trying to read one frame payload chunk.
+            ok, _ = self.read()
+            if ok:
+                print(f"[GStreamer CLI] Pipeline PLAYING with software (avdec_{codec})", flush=True)
+                return
+            if self.proc is not None:
+                try:
+                    if self.proc.stderr is not None:
+                        err_bytes = self.proc.stderr.read(2048)
+                        if err_bytes:
+                            last_err = err_bytes.decode(errors="ignore")
+                except Exception:
+                    pass
+                self.proc.terminate()
+                self.proc = None
+
+        raise RuntimeError(
+            "Failed to initialize gst-launch appsink equivalent output "
+            f"(tried h264/h265 software decoders). Last stderr: {last_err or 'n/a'}"
+        )
 
     def read(self):
         frame_size = self.width * self.height * 3

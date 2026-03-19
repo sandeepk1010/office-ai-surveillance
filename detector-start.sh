@@ -3,7 +3,7 @@ set -e
 cd /home/trinetra-jetson/office-ai-surveillance
 
 # IN detector (channel 2 by default)
-RTSP_URL="${DETECTOR_IN_RTSP_URL:-rtsp://admin:India123#@192.168.2.103:554/cam/realmonitor?channel=2&subtype=0}"
+RTSP_URL="${DETECTOR_IN_RTSP_URL:-rtsp://admin:India123%23@192.168.2.103:554/cam/realmonitor?channel=2&subtype=0}"
 MODEL_PATH="${DETECTOR_IN_MODEL:-python-scripts/yolov8n.pt}"
 ROI_FILE="${DETECTOR_IN_ROI_FILE:-python-scripts/roi_cam2.json}"
 LINE_X_MARGIN="${DETECTOR_IN_LINE_X_MARGIN:-120}"
